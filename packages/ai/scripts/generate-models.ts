@@ -228,6 +228,20 @@ function mergeThinkingLevelMap(model: Model<any>, map: NonNullable<Model<any>["t
 	model.thinkingLevelMap = { ...model.thinkingLevelMap, ...map };
 }
 
+function mergeDeepSeekV4ThinkingLevelMap(model: Model<any>): void {
+	const id = model.id.toLowerCase();
+	if (model.api !== "openai-completions") return;
+	if (!id.includes("deepseek-v4") && !id.includes("deepseek-flash")) return;
+	mergeThinkingLevelMap(model, DEEPSEEK_V4_THINKING_LEVEL_MAP);
+}
+
+function mergeDeepSeekV4CompatMap(model: Model<any>): void {
+	const id = model.id.toLowerCase();
+	if (model.api !== "openai-completions") return;
+	if (!id.includes("deepseek-v4") && !id.includes("deepseek-flash")) return;
+	model.compat = { ...model.compat, ...DEEPSEEK_V4_COMPAT};
+}
+
 function supportsOpenAiXhigh(modelId: string): boolean {
 	return (
 		modelId.includes("gpt-5.2") ||
@@ -312,9 +326,7 @@ function applyThinkingLevelMetadata(model: Model<any>): void {
 	if (model.id.includes("mythos-preview")) {
 		mergeThinkingLevelMap(model, { off: null, max: "max" });
 	}
-	if (model.api === "openai-completions" && model.id.includes("deepseek-v4")) {
-		mergeThinkingLevelMap(model, DEEPSEEK_V4_THINKING_LEVEL_MAP);
-	}
+	mergeDeepSeekV4ThinkingLevelMap(model);
 	const kimiK3Id = model.id.toLowerCase();
 	if (!model.thinkingLevelMap && (/^k3(-|$)/.test(kimiK3Id) || /(^|\/)kimi-k3(-|$)/.test(kimiK3Id))) {
 		mergeThinkingLevelMap(model, KIMI_K3_THINKING_LEVEL_MAP);
@@ -450,12 +462,6 @@ function isPrimeInferenceReasoningModel(modelId: string, catalogReasoning?: bool
 
 function getPrimeInferenceCompat(modelId: string): OpenAICompletionsCompat {
 	const id = modelId.toLowerCase();
-	if (id.includes("deepseek-v4")) {
-		return {
-			...PRIME_INFERENCE_COMPAT,
-			...DEEPSEEK_V4_COMPAT,
-		};
-	}
 	if (id.startsWith("z-ai/glm-")) {
 		return {
 			...PRIME_INFERENCE_COMPAT,
@@ -929,6 +935,32 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					api: "openai-completions",
 					provider: "cerebras",
 					baseUrl: "https://api.cerebras.ai/v1",
+					reasoning: m.reasoning === true,
+					input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
+					cost: {
+						input: m.cost?.input || 0,
+						output: m.cost?.output || 0,
+						cacheRead: m.cost?.cache_read || 0,
+						cacheWrite: m.cost?.cache_write || 0,
+					},
+					contextWindow: m.limit?.context || 4096,
+					maxTokens: m.limit?.output || 4096,
+				});
+			}
+		}
+
+		// Process DeepSeek models
+		if (data.deepseek?.models) {
+			for (const [modelId, model] of Object.entries(data.deepseek.models)) {
+				const m = model as ModelsDevModel;
+				if (m.tool_call !== true) continue;
+
+				models.push({
+					id: modelId,
+					name: m.name || modelId,
+					api: "openai-completions",
+					provider: "deepseek",
+					baseUrl: "https://api.deepseek.com",
 					reasoning: m.reasoning === true,
 					input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
 					cost: {
@@ -1760,62 +1792,6 @@ async function generateModels() {
 		});
 	}
 
-	const deepseekV4Models: Model<"openai-completions">[] = [
-		{
-			id: "deepseek-v4-flash",
-			name: "DeepSeek V4 Flash",
-			api: "openai-completions",
-			baseUrl: "https://api.deepseek.com",
-			provider: "deepseek",
-			reasoning: true,
-			input: ["text"],
-			cost: {
-				input: 0.14,
-				output: 0.28,
-				cacheRead: 0.0028,
-				cacheWrite: 0,
-			},
-			contextWindow: 1000000,
-			maxTokens: 384000,
-			compat: DEEPSEEK_V4_COMPAT,
-		},
-		{
-			id: "deepseek-v4-pro",
-			name: "DeepSeek V4 Pro",
-			api: "openai-completions",
-			baseUrl: "https://api.deepseek.com",
-			provider: "deepseek",
-			reasoning: true,
-			input: ["text"],
-			cost: {
-				input: 0.435,
-				output: 0.87,
-				cacheRead: 0.003625,
-				cacheWrite: 0,
-			},
-			contextWindow: 1000000,
-			maxTokens: 384000,
-			compat: DEEPSEEK_V4_COMPAT,
-		},
-	];
-	allModels.push(...deepseekV4Models);
-
-	for (const candidate of allModels) {
-		if (candidate.api === "openai-completions" && candidate.id.includes("deepseek-v4")) {
-			candidate.compat = {
-				...candidate.compat,
-				...(candidate.provider === "openrouter"
-					? {
-							requiresReasoningContentOnAssistantMessages:
-								DEEPSEEK_V4_COMPAT.requiresReasoningContentOnAssistantMessages,
-							thinkingFormat: DEEPSEEK_V4_COMPAT.thinkingFormat,
-						}
-					: DEEPSEEK_V4_COMPAT),
-			};
-			mergeThinkingLevelMap(candidate, DEEPSEEK_V4_THINKING_LEVEL_MAP);
-		}
-	}
-
 	const minimaxDirectSupportedIds = new Set(["MiniMax-M2.7", "MiniMax-M2.7-highspeed"]);
 
 	for (const candidate of allModels) {
@@ -2256,6 +2232,7 @@ async function generateModels() {
 	allModels.push(...azureOpenAiModels);
 
 	for (const model of allModels) {
+		mergeDeepSeekV4CompatMap(model);
 		applyThinkingLevelMetadata(model);
 	}
 
